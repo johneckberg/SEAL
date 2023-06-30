@@ -12,11 +12,20 @@ In the context of vector similarity, we aim for similar vectors to be grouped in
 
 ARF achieves this by identifying splits in the data space that best separate vectors based on their target variable values. If the target variable accurately captures the similarity of the vectors (for instance, semantic similarity for text embeddings), the process should result in leaves where vectors are highly similar to each other.
 
+The paper presents a theorem on the convergence of Adversarial Random Forests (ARF) under certain assumptions. Let's denote the parameters of an ARF trained on a sample of size n as Θn. The theorem states that for all x ∈ X, θb` ∈ Θn, and ε > 0:
+
+P(|p(x|θb`) - p(x)| > ε) → 0 as n → ∞
+
+This means that the probability that the absolute difference between the estimated density function p(x|θb`) and the true density function p(x) is greater than ε converges to 0 as the number of samples n goes to infinity. In other words, the ARF's estimate of the density function becomes increasingly accurate as the number of samples increases.
+
+In the context of using ARF as a learned hashing mechanism, this convergence property is particularly relevant. Let's denote a high-dimensional vector as v and the function that maps a vector to a leaf (or "hash bucket") in the ARF as H(v). The goal of the hashing mechanism is to map similar vectors to the same leaf, i.e., for similar vectors v1 and v2, we want H(v1) = H(v2).
+
 The convergence property of ARF provides a mathematical guarantee that as the number of vectors increases, the ARF algorithm will increasingly accurately map similar vectors to the same leaf. This can be expressed as:
 
 P(H(v1) ≠ H(v2)|similarity(v1, v2) > threshold) → 0 as n → ∞
 
 This means that the probability that similar vectors v1 and v2 (based on some similarity measure and a chosen threshold) are mapped to different leaves converges to 0 as the number of vectors n goes to infinity. In other words, the ARF algorithm becomes increasingly accurate at mapping similar vectors to the same leaf as the dataset grows.
+
 Practical Application
 
 In this project, we utilize ARF as a learned hashing mechanism. It maps similar vectors to the same leaf (or "hash bucket"), allowing us to dramatically reduce the number of pairwise similarity computations we need to make. This accelerates the search process in large, high-dimensional datasets.
