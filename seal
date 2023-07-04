@@ -1,0 +1,259 @@
+import numpy as np
+import time
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics.pairwise import cosine_similarity
+
+
+class Arf:
+    """Implements Adversarial Random Forests (ARF) in python
+  :param x: Input data.
+  :type x: pandas.Dataframe
+  :param num_trees:  Number of trees to grow in each forest, defaults to 30
+  :type num_trees: int, optional
+  :param delta: Tolerance parameter. Algorithm converges when OOB accuracy is < 0.5 + `delta`, defaults to 0
+  :type delta: int, optional
+  :param max_iters: Maximum iterations for the adversarial loop, defaults to 10
+  :type max_iters: int, optional
+  :param early_stop: Terminate loop if performance fails to improve from one round to the next?, defaults to True
+  :type early_stop: bool, optional
+  :param verbose: Print discriminator accuracy after each round?, defaults to True
+  :type verbose: bool, optional
+  :param min_node_size: minimum number of samples in terminal node, defaults to 5
+  :type min_node_size: int
+  """
+
+    def __init__(self, x, num_trees=30, delta=0, max_iters=10, early_stop=True, verbose=True, min_node_size=5,
+                 **kwargs):
+        self.p = x.shape[1]
+        self.num_trees = num_trees
+
+        # If no synthetic data provided, sample from marginals
+        x_synth_np = x.copy()
+        for i in range(x_synth_np.shape[1]):
+            np.random.shuffle(x_synth_np[:, i])
+
+        print("prelim sample")
+        # Merge real and synthetic data
+        x_np = np.concatenate([x, x_synth_np], axis=0)
+        y = np.concatenate([np.zeros(x.shape[0]), np.ones(x.shape[0])])
+        # real observations = 0, synthetic observations = 1
+
+        # pass on x
+        self.x_real = x
+
+        # Fit initial RF model
+        print("fitting")
+        clf_0 = RandomForestClassifier(oob_score=True, n_estimators=self.num_trees, min_samples_leaf=min_node_size,
+                                       **kwargs)
+        clf_0.fit(x_np, y)  # Use x_np instead of x
+
+        iters = 0
+
+        acc_0 = clf_0.oob_score_  # is accuracy directly
+        acc = [acc_0]
+
+        if verbose is True:
+            print(f'Initial accuracy is {acc_0}')
+
+        if (acc_0 > 0.5 + delta and iters < max_iters):
+            converged = False
+            print("starting loop")
+            while (not converged):  # Start adversarial loop
+
+                # Get the node IDs for each tree using clf_0.apply()
+                nodeIDs = clf_0.apply(x)
+
+                # Convert nodeIDs to a NumPy array and add observation IDs
+                nodeIDs_np = np.hstack((np.arange(x.shape[0])[:, np.newaxis], nodeIDs))
+
+                # Create an array of tree indices
+                tree_indices = np.repeat(np.arange(nodeIDs.shape[1]), nodeIDs.shape[0])[:, np.newaxis]
+
+                # Create an array of observation IDs, repeated for each tree? this might be wrong
+                obs_ids = np.tile(np.arange(x.shape[0]), nodeIDs.shape[1])[:, np.newaxis]
+
+                # Combine the tree_indices, obs_ids, and nodeIDs_np into a single array
+                melted_np = np.hstack((tree_indices, obs_ids, nodeIDs_np[:, 1:].reshape(-1, 1)))
+
+                # Sample tree-leaf pairs
+                sampled_pairs = melted_np[np.random.choice(melted_np.shape[0], x.shape[0], replace=True), 1:]
+
+                # Generate synthetic data using NumPy indexing
+                x_synth = self.generate_synthetic_data(sampled_pairs)
+                # TODO delete objects?
+
+                # Merge real and synthetic data
+                x_np = np.concatenate([x, x_synth], axis=0)
+                y = np.concatenate([np.zeros(x.shape[0]), np.ones(x.shape[0])])
+                # real observations = 0, synthetic observations = 1
+
+                # instantiate and fit discriminator
+                clf_1 = RandomForestClassifier(oob_score=True, n_estimators=self.num_trees,
+                                               min_samples_leaf=min_node_size, **kwargs)
+                clf_1.fit(x_np, y)
+
+                # update iters and check for convergence
+                acc_1 = clf_1.oob_score_
+
+                acc.append(acc_1)
+
+                iters = iters + 1
+                plateau = True if early_stop is True and acc[iters] > acc[iters - 1] else False
+                if verbose is True:
+                    print(f"Iteration number {iters} reached accuracy of {acc_1}.")
+                if (acc_1 <= 0.5 + delta or iters >= max_iters or plateau):
+                    converged = True
+                else:
+                    clf_0 = clf_1
+        self.clf = clf_0
+        self.acc = acc
+
+        # Pruning TODO extract into helper method
+        print("pruning trees")
+        self.prune_trees(min_node_size)
+
+    def prune_tree(self, tree_num, min_node_size):
+        pred = self.clf.apply(self.x_real)
+        tree = self.clf.estimators_[tree_num]
+        left = tree.tree_.children_left
+        right = tree.tree_.children_right
+        leaves = np.where(left < 0)[0]
+
+        # get leaves that are too small
+        unique, counts = np.unique(pred[:, tree_num], return_counts=True)
+        to_prune = unique[counts < min_node_size]
+
+        # also add leaves with 0 obs.
+        to_prune = np.concatenate([to_prune, np.setdiff1d(leaves, unique)])
+
+        while len(to_prune) > 0:
+            for tp in to_prune:
+                # Find parent
+                parent = np.where(left == tp)[0]
+                if len(parent) > 0:
+                    # Left child
+                    left[parent] = right[parent]
+                else:
+                    # Right child
+                    parent = np.where(right == tp)[0]
+                    right[parent] = left[parent]
+            # Prune again if child was pruned
+            to_prune = np.where(np.in1d(left, to_prune))[0]
+
+    def prune_trees(self, min_node_size):
+        print("pruning trees")
+        for tree_num in range(0, self.num_trees):
+            self.prune_tree(tree_num, min_node_size)
+
+    def generate_synthetic_data(self, nodeIDs_np):
+        # Find unique tree-leaf pairs and counts
+        unique_pairs, counts = np.unique(nodeIDs_np, axis=0, return_counts=True)
+
+        # Compute probabilities proportional to the size of the leaves
+        probs = counts / counts.sum()
+
+        # Prepare a list to store synthetic data
+        x_synth_list = []
+
+        # Sample from unique tree-leaf pairs with replacement using the probabilities
+        sampled_pairs = np.random.choice(len(unique_pairs), size=self.x_real.shape[0], replace=True, p=probs)
+
+        # For each sampled tree-leaf pair
+        for pair_idx in sampled_pairs:
+            # Get the pair and count
+            pair = unique_pairs[pair_idx]
+            count = counts[pair_idx]
+
+            # Create a mask to select matching data points from x_real_np
+            mask = np.all(nodeIDs_np == pair, axis=1)
+
+            # Select the group of matching data points
+            group = self.x_real[mask]
+
+            # Generate synthetic data by sampling with replacement from the group
+            synthetic_data = group[np.random.choice(group.shape[0], size=count, replace=True)]
+
+            # Add the synthetic data to the list
+            x_synth_list.append(synthetic_data)
+
+        # Concatenate all synthetic data into a single array
+        x_synth = np.concatenate(x_synth_list, axis=0)
+
+        return x_synth
+
+
+class Seal:
+    """
+    "Similarity Estimation from Adversarial Learning"
+    The Seal class is used to index and query data using Adversarial Random Forests (ARF).
+
+     Attributes:
+        num_trees (int): The number of trees to grow in each forest.
+        arf_model (object): The trained ARF model.
+        leaf_dict (dict): A dictionary mapping each leaf in each tree to the indices of the data points in that leaf.
+        X (np.array): The original data used for indexing.
+        """
+
+    def __init__(self, num_trees=5):
+        self.num_trees = num_trees
+        self.arf_model = None
+        self.leaf_dict = None
+        self.X = None
+
+    def index(self, X):
+        # TODO Timeit
+        # Train the ARF model
+        self.arf_model = Arf(X, num_trees=self.num_trees)
+        print("arf trained")
+
+        # Store the original data
+        self.X = X
+
+        # Initialize the dictionary
+        self.leaf_dict = {}
+
+        # Fill the dictionary with the indices of the data points in each leaf
+        leaf_indices = self.arf_model.clf.apply(X)
+        for tree_index in range(leaf_indices.shape[1]):
+            for leaf_index in np.unique(leaf_indices[:, tree_index]):
+                key = (tree_index, leaf_index)
+                self.leaf_dict[key] = np.where(leaf_indices[:, tree_index] == leaf_index)[0]
+
+    def query(self, data_point):
+        start_time = time.time()  # Start timing
+
+        # Ensure data_point is a 2D array
+        if len(data_point.shape) == 1:
+            data_point = data_point[np.newaxis, :]
+
+        # Get the leaf indices for the data point
+        new_leaf_indices = self.arf_model.clf.apply(data_point)
+
+        # Find the union of the data point sets for each leaf
+        data_points_in_all_leaves = np.array([], dtype=int)  # Start with an empty array
+        for tree_index, leaf_index in enumerate(new_leaf_indices[0]):
+            key = (tree_index, leaf_index)
+            data_points_in_all_leaves = np.union1d(data_points_in_all_leaves,
+                                                   self.leaf_dict.get(key, np.array([], dtype=int)))
+
+        # Check if any data points were found
+        if data_points_in_all_leaves.size == 0:
+            print("No similar data points were found.")
+            return None
+        else:
+            # Extract the corresponding data points
+            data_points = self.X[data_points_in_all_leaves]
+
+            # Calculate the cosine similarity
+            similarity_scores = cosine_similarity(data_point, data_points)
+
+            # Find the index of the most similar data point
+            most_similar_index = np.argmax(similarity_scores)
+
+            # Stop timing
+            end_time = time.time()
+            elapsed_time = end_time - start_time
+            print(f"Query time: {elapsed_time} seconds")
+
+            # Return the most similar data point
+            return data_points[most_similar_index]
