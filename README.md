@@ -1,33 +1,13 @@
-Project: Efficient Vector Similarity Search with Adversarial Random Forests (ARF)
-Overview
+Seal: Similarity Estimation from Adversarial Learning
 
-This project introduces an innovative method for performing efficient similarity search over high-dimensional vectors. We leverage Adversarial Random Forests (ARF), a machine learning algorithm traditionally used for classification tasks, and repurpose it as a learned hashing mechanism. This approach significantly reduces the number of pairwise similarity computations required for nearest neighbor searches in large, high-dimensional datasets.
+The Seal class is used to index and query data using Adversarial Random Forests (ARF). The primary concept behind the algorithm is to ensure that data are jointly independent within each leaf of the ARF.
+Key Concepts:
 
-The repository includes Python scripts for creating vector embeddings using LASER, indexing them using ARF from the arfpy package, and performing efficient similarity searches.
-Theoretical Background
+Adversarial Random Forests (ARF): ARF is a modification of the standard Random Forest algorithm. The ARF algorithm iteratively generates synthetic data and trains classifiers to distinguish between the original and synthetic data. The iteration continues until the classifier's out-of-bag accuracy falls below a certain threshold, indicating that the synthetic and original data are near-indistinguishable.
 
-ARF is an iterative algorithm that partitions a dataset into distinct regions, or "leaves". The goal of ARF is to ensure that the data within each leaf is as independent as possible, meaning there should be no predictable relationship among vectors within the leaf based on the dimensions considered.
+Leaf Coverage: Each leaf of an ARF covers a hyper-rectangular subspace in the feature space, representing a subset of adjacent vectors. The accuracy of this coverage improves as the error of coverage reduces, leading to a more refined partitioning of the feature space.
 
-In the context of vector similarity, we aim for similar vectors to be grouped in the same leaf. When a new vector is introduced, we can quickly identify a smaller set of potential nearest neighbors by examining other vectors in the same leaf, rather than the entire dataset.
+Indexing and Querying: The Seal class uses ARF for indexing and querying. In the indexing phase, it trains an ARF model on the data and maps each leaf to the indices of data points falling within it. During the query phase, it identifies the leaves that a new data point falls into and returns the most similar data point within those leaves based on cosine similarity.
+Improvements with Larger Datasets:
 
-ARF achieves this by identifying splits in the data space that best separate vectors based on their target variable values. If the target variable accurately captures the similarity of the vectors (for instance, semantic similarity for text embeddings), the process should result in leaves where vectors are highly similar to each other.
-
-The paper presents a theorem on the convergence of Adversarial Random Forests (ARF) under certain assumptions. Let's denote the parameters of an ARF trained on a sample of size n as Θn. The theorem states that for all x ∈ X, θb` ∈ Θn, and ε > 0:
-
-P(|p(x|θb`) - p(x)| > ε) → 0 as n → ∞
-
-This means that the probability that the absolute difference between the estimated density function p(x|θb`) and the true density function p(x) is greater than ε converges to 0 as the number of samples n goes to infinity. In other words, the ARF's estimate of the density function becomes increasingly accurate as the number of samples increases.
-
-In the context of using ARF as a learned hashing mechanism, this convergence property is particularly relevant. Let's denote a high-dimensional vector as v and the function that maps a vector to a leaf (or "hash bucket") in the ARF as H(v). The goal of the hashing mechanism is to map similar vectors to the same leaf, i.e., for similar vectors v1 and v2, we want H(v1) = H(v2).
-
-The convergence property of ARF provides a mathematical guarantee that as the number of vectors increases, the ARF algorithm will increasingly accurately map similar vectors to the same leaf. This can be expressed as:
-
-P(H(v1) ≠ H(v2)|similarity(v1, v2) > threshold) → 0 as n → ∞
-
-This means that the probability that similar vectors v1 and v2 (based on some similarity measure and a chosen threshold) are mapped to different leaves converges to 0 as the number of vectors n goes to infinity. In other words, the ARF algorithm becomes increasingly accurate at mapping similar vectors to the same leaf as the dataset grows.
-
-Practical Application
-
-In this project, we utilize ARF as a learned hashing mechanism. It maps similar vectors to the same leaf (or "hash bucket"), allowing us to dramatically reduce the number of pairwise similarity computations we need to make. This accelerates the search process in large, high-dimensional datasets.
-
-The project's scripts can be adapted for various types of high-dimensional vectors, including text embeddings, image feature vectors, and more.
+As the dataset size increases, the indexing generally becomes more accurate due to better density estimation and reduced coverage error. A larger dataset provides a more accurate estimation of the underlying data density, leading to improved partitioning of the feature space. Additionally, the Glivenko-Cantelli theorem guarantees that the empirical distribution of data within each leaf node converges to the true underlying distribution as the dataset size increases, reducing the error of coverage. Consequently, each leaf node covers a more accurate subset of the feature space. However, while more data typically lead to better performance, there are diminishing returns beyond a certain dataset size. Also, data quality and diversity, model parameters, and the complexity of the underlying data distribution can impact the effectiveness of the indexing.
